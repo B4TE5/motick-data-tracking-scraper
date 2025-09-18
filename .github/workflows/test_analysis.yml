@@ -1,0 +1,31 @@
+name: Test Analysis Only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Test Analysis Only
+      env:
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID_DATA }}
+      run: |
+        cd scr  # Nota: es 'scr' no 'src'
+        python analisis_data.py

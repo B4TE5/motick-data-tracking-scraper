@@ -1,4 +1,4 @@
-name: Cuimo Scraper Automation
+name: Scraper Automation
 
 on:
   # Ejecutar automaticamente cada dia a las 06:00 UTC (08:00 Madrid)
@@ -75,7 +75,7 @@ jobs:
     - name: Run Scraper
       env:
         GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID_CUIMO }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID_DATA }}
         HEADLESS_MODE: true
         TEST_MODE: ${{ inputs.test_mode }}
       run: |
@@ -85,7 +85,7 @@ jobs:
     - name: Run Analysis
       env:
         GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID_CUIMO }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID_DATA }}
       run: |
         cd scr
         python analisis_data.py

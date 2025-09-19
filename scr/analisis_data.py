@@ -1,11 +1,12 @@
 """
-Analizador Historico - Version Google Sheets V8.2 CORREGIDO
+Analizador Historico - Version Google Sheets V8.3 CORREGIDO FINAL
 Lee datos del scraper desde Google Sheets y actualiza el historico evolutivo
 
-CORRECCIONES VERSION 8.2:
+CORRECCIONES VERSION 8.3:
 - ARREGLO CRITICO: tuple indices error corregido
 - URL como identificador unico principal (SIN PRECIO)
-- Mantiene hojas originales: Data_Historico
+- ORDENAMIENTO CORREGIDO: Por kilómetros de más a menos (consistente con scraper)
+- Mantiene hojas originales: Data_Historico, Motos_Activas, Motos_Vendidas
 - Añade Visitas_Totales y Likes_Totales
 - Maneja valores NA correctamente
 """
@@ -89,7 +90,7 @@ class AnalizadorHistoricoData:
     def crear_id_unico_real(self, fila):
         """
         Crea ID unico basado SOLO en: URL + cuenta + titulo + km
-        CORRECCION CRITICA V8.2: NO INCLUYE PRECIO (puede cambiar)
+        CORRECCION CRITICA V8.3: NO INCLUYE PRECIO (puede cambiar)
         """
         try:
             url = str(fila.get('URL', '')).strip()
@@ -136,12 +137,13 @@ class AnalizadorHistoricoData:
     def mostrar_header(self):
         """Muestra el header del sistema"""
         print("="*80)
-        print("ANALIZADOR HISTORICO V8.2 - VERSION GOOGLE SHEETS CORREGIDA")
+        print("ANALIZADOR HISTORICO V8.3 - VERSION CORREGIDA FINAL")
         print("="*80)
         print(f"Fecha procesamiento: {self.fecha_display}")
         print("Logica: URL como identificador unico principal (SIN PRECIO)")
+        print("ORDENAMIENTO: Por kilómetros de más a menos (consistente con scraper)")
         print("Fuente: Google Sheets")
-        print("Hojas: Data_Historico (principal), SCR (datos diarios)")
+        print("Hojas: Data_Historico, Motos_Activas, Motos_Vendidas")
         print()
         
     def normalizar_nombres_columnas(self, df):
@@ -321,6 +323,21 @@ class AnalizadorHistoricoData:
             print(f"ADVERTENCIA: Error limpiando columnas: {str(e)}")
             return df
         
+    def extraer_km_para_ordenar(self, km_str):
+        """Extrae valor numérico de kilómetros para ordenar correctamente"""
+        try:
+            if pd.isna(km_str) or km_str == "No especificado" or not km_str:
+                return 999999  # Al final los sin KM
+            
+            km_clean = str(km_str).replace('.', '').replace(',', '').replace(' km', '').replace('km', '').strip()
+            if km_clean == '0':
+                return 0
+            
+            numbers = re.findall(r'\d+', km_clean)
+            return int(numbers[0]) if numbers else 999999
+        except:
+            return 999999
+    
     def primera_ejecucion(self, df_nuevo):
         """Crea el historico por primera vez con formato de columnas por fecha"""
         print("Primera ejecucion - Creando historico inicial")
@@ -343,6 +360,12 @@ class AnalizadorHistoricoData:
         
         df_historico = df_historico.drop(['Visitas', 'Likes'], axis=1)
         df_historico['Variacion_Likes'] = 0
+        
+        # ORDENAMIENTO CORREGIDO: Por kilómetros de más a menos
+        print("[ORDENAMIENTO] Aplicando orden por kilómetros (más a menos)...")
+        df_historico['KM_Temp'] = df_historico['Kilometraje'].apply(self.extraer_km_para_ordenar)
+        df_historico = df_historico.sort_values(['KM_Temp', 'Titulo'], ascending=[False, True])
+        df_historico = df_historico.drop('KM_Temp', axis=1)
         
         # Ordenar columnas correctamente
         columnas_orden = [
@@ -391,8 +414,8 @@ class AnalizadorHistoricoData:
             
     def procesar_motos_nuevas_y_existentes(self, df_nuevo, df_historico):
         """
-        LOGICA CORREGIDA V8.2: USA URLs como identificador principal
-        ARREGLO: Manejo correcto de DataFrame vs tupla
+        LOGICA CORREGIDA V8.3: USA URLs como identificador principal
+        ORDENAMIENTO CORREGIDO: Por kilómetros de más a menos
         """
         
         try:
@@ -578,21 +601,24 @@ class AnalizadorHistoricoData:
             print("Limpieza final de datos...")
             df_actualizado = self.limpiar_columnas_numericas(df_actualizado)
             
-            # ORDENACION: activas arriba por likes, vendidas abajo
+            # ORDENACION CORREGIDA: Por kilómetros de más a menos
+            print("[ORDENAMIENTO] Aplicando orden por kilómetros (más a menos)...")
             df_activas = df_actualizado[df_actualizado['Estado'] == 'activa'].copy()
             df_vendidas = df_actualizado[df_actualizado['Estado'] == 'vendida'].copy()
             
-            # Ordenar activas por likes y visitas de hoy
-            if col_likes_hoy in df_activas.columns:
-                df_activas = df_activas.sort_values(
-                    [col_likes_hoy, col_visitas_hoy], ascending=[False, False], na_position='last'
-                )
+            # Ordenar activas por kilómetros (más a menos)
+            if not df_activas.empty:
+                df_activas['KM_Temp'] = df_activas['Kilometraje'].apply(self.extraer_km_para_ordenar)
+                df_activas = df_activas.sort_values(['KM_Temp', 'Titulo'], ascending=[False, True])
+                df_activas = df_activas.drop('KM_Temp', axis=1)
+                print(f"[ORDENAMIENTO] {len(df_activas)} activas ordenadas por KM (más a menos)")
             
             # Ordenar vendidas por fecha de venta
             if not df_vendidas.empty and 'Fecha_Venta' in df_vendidas.columns:
                 df_vendidas = df_vendidas.sort_values('Fecha_Venta', ascending=False, na_position='last')
+                print(f"[ORDENAMIENTO] {len(df_vendidas)} vendidas ordenadas por fecha venta")
             
-            # Concatenar: activas arriba, vendidas abajo
+            # Concatenar: activas arriba (por KM), vendidas abajo
             df_actualizado = pd.concat([df_activas, df_vendidas], ignore_index=True)
             
             return df_actualizado
@@ -609,7 +635,7 @@ class AnalizadorHistoricoData:
         self.stats['tiempo_ejecucion'] = tiempo_total
         
         print(f"\n{'='*80}")
-        print("PROCESAMIENTO COMPLETADO V8.2 CORREGIDO")
+        print("PROCESAMIENTO COMPLETADO V8.3 CORREGIDO FINAL")
         print("="*80)
         print(f"Fecha procesada: {self.fecha_display}")
         print(f"Motos en datos del scraper: {self.stats['total_archivo_nuevo']:,}")
@@ -620,6 +646,7 @@ class AnalizadorHistoricoData:
         print(f"Errores procesamiento: {self.stats['errores']:,}")
         print(f"Tiempo ejecucion: {tiempo_total:.2f} segundos")
         print(f"Nuevas columnas: Visitas_{self.fecha_display}, Likes_{self.fecha_display}")
+        print(f"ORDENAMIENTO: Por kilómetros de más a menos (consistente con scraper)")
         
         if self.top_likes_crecimiento:
             print(f"\nDESTACADOS DEL DIA:")
@@ -632,8 +659,9 @@ class AnalizadorHistoricoData:
             print("Las motos con errores mantuvieron sus datos anteriores")
         
         print("\nHistorico evolutivo consolidado exitosamente!")
-        print("LOGICA CORREGIDA V8.2: URL como identificador unico (SIN PRECIO)")
-        print("Hojas: Data_Historico (principal)")
+        print("LOGICA CORREGIDA V8.3: URL como identificador unico (SIN PRECIO)")
+        print("ORDENAMIENTO: Por kilómetros de más a menos (consistente)")
+        print("Hojas: Data_Historico, Motos_Activas, Motos_Vendidas")
         
     def ejecutar(self):
         """Funcion principal que ejecuta todo el proceso - CORREGIDA"""
@@ -695,12 +723,13 @@ class AnalizadorHistoricoData:
 
 def main():
     """Funcion principal del analizador - CORREGIDA"""
-    print("Iniciando Analizador Historico V8.2 - Version Google Sheets CORREGIDA FINAL...")
-    print("VERSION AUTOMATIZADA V8.2:")
+    print("Iniciando Analizador Historico V8.3 - Version Google Sheets CORREGIDA FINAL...")
+    print("VERSION AUTOMATIZADA V8.3:")
     print("   • Lee datos del scraper desde Google Sheets (hojas SCR)")
     print("   • Actualiza historico evolutivo en Google Sheets")
     print("   • USA URL como identificador unico principal (SIN PRECIO)")
-    print("   • Mantiene hojas originales: Data_Historico")
+    print("   • ORDENAMIENTO: Por kilómetros de más a menos (consistente con scraper)")
+    print("   • Mantiene hojas: Data_Historico, Motos_Activas, Motos_Vendidas")
     print("   • Cada ejecucion anade: Visitas_FECHA y Likes_FECHA")
     print("   • Anade Visitas_Totales y Likes_Totales")
     print("   • ARREGLO CRITICO: Manejo correcto de DataFrame vs tupla")
@@ -712,21 +741,22 @@ def main():
     exito = analizador.ejecutar()
     
     if exito:
-        print("\nPROCESO COMPLETADO EXITOSAMENTE V8.2")
+        print("\nPROCESO COMPLETADO EXITOSAMENTE V8.3")
         print("FORMATO DEL HISTORICO:")
         print("   • Columnas basicas: ID_Unico_Real, Cuenta, Titulo, Precio, etc.")
         print("   • Columnas totales: Visitas_Totales, Likes_Totales")
         print("   • Columnas por fecha: Visitas_DD/MM/YYYY, Likes_DD/MM/YYYY")
         print("   • Ultima columna: Variacion_Likes (respecto a fecha anterior)")
-        print("   • ORDENACION: Activas arriba (por likes), vendidas abajo")
+        print("   • ORDENACION: Por kilómetros de más a menos (consistente con scraper)")
         print("   • ID UNICO: URL + cuenta + titulo + km (SIN PRECIO)")
         
         print("\nPARA LA SIGUIENTE EJECUCION:")
         print("   1. El scraper se ejecutara automaticamente")
         print("   2. Este analizador se ejecutara automaticamente despues")
         print("   3. Se anadiran automaticamente las nuevas columnas")
-        print("   URL siempre usado como identificador unico!")
-        print("   Hojas: Data_Historico (principal)")
+        print("   • CONSISTENCIA: Mismo ordenamiento que scraper (por KM)")
+        print("   • URL siempre usado como identificador unico!")
+        print("   • Hojas: Data_Historico, Motos_Activas, Motos_Vendidas")
         
         return True
     else:

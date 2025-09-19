@@ -444,8 +444,8 @@ class GoogleSheetsData:
     
     def ordenar_historico_completo(self, df_historico):
         """
-        Ordena el historico: 
-        - ACTIVAS por Kilometraje DESC, luego Titulo ASC
+        CORREGIDO: Ordena el historico por kilómetros de más a menos (consistente con scraper)
+        - ACTIVAS por Kilometraje DESC (más a menos KM), luego Titulo ASC
         - VENDIDAS por Fecha_Venta DESC (sin cambios)
         """
         try:
@@ -453,35 +453,69 @@ class GoogleSheetsData:
             df_activas = df_historico[df_historico['Estado'] == 'activa'].copy()
             df_vendidas = df_historico[df_historico['Estado'] == 'vendida'].copy()
             
-            # NUEVO: Ordenar activas por Kilometraje DESC, luego Titulo ASC
+            # CORREGIDO: Ordenar activas por Kilometraje DESC (MAS A MENOS KM)
             if not df_activas.empty:
-                # Convertir Kilometraje a numerico para ordenar correctamente
-                df_activas['KM_Numerico'] = df_activas['Kilometraje'].str.extract(r'(\d+)').fillna(0).astype(int)
+                # Función para extraer valor numérico de kilómetros
+                def extraer_km_numerico(km_str):
+                    """Extrae valor numérico de kilómetros para ordenar correctamente"""
+                    try:
+                        if pd.isna(km_str) or km_str == "No especificado" or not km_str:
+                            return 999999  # Poner al final los que no tienen KM
+                        
+                        # Limpiar string y extraer número
+                        km_clean = str(km_str).replace('.', '').replace(',', '').replace(' km', '').replace('km', '').strip()
+                        
+                        # Si es "0 km" o similar
+                        if km_clean == '0':
+                            return 0
+                        
+                        # Extraer número usando regex
+                        numbers = re.findall(r'\d+', km_clean)
+                        if numbers:
+                            return int(numbers[0])
+                        else:
+                            return 999999  # Poner al final si no se puede extraer
+                            
+                    except:
+                        return 999999  # Poner al final en caso de error
                 
-                # Ordenar por KM (mas a menos) y luego por Titulo (A-Z)
+                # Crear columna temporal para ordenar
+                df_activas['KM_Numerico_Temp'] = df_activas['Kilometraje'].apply(extraer_km_numerico)
+                
+                # Ordenar por KM de MAS a MENOS (descendente), luego por Titulo (ascendente)
                 df_activas = df_activas.sort_values(
-                    ['KM_Numerico', 'Titulo'], 
-                    ascending=[False, True], 
+                    ['KM_Numerico_Temp', 'Titulo'], 
+                    ascending=[False, True],  # False = descendente (más a menos KM)
                     na_position='last'
                 )
                 
                 # Eliminar columna temporal
-                df_activas = df_activas.drop('KM_Numerico', axis=1)
+                df_activas = df_activas.drop('KM_Numerico_Temp', axis=1)
                 
-                print(f"ORDENACION: {len(df_activas)} activas ordenadas por KM DESC, Titulo ASC")
+                print(f"ORDENACION: {len(df_activas)} activas ordenadas por KM DESC (más a menos), Titulo ASC")
+                
+                # DEBUG: Mostrar algunos ejemplos del ordenamiento
+                if len(df_activas) > 0:
+                    print("EJEMPLOS ORDENAMIENTO (TOP 5 POR KM):")
+                    top_5 = df_activas[['Titulo', 'Kilometraje']].head(5)
+                    for i, (_, row) in enumerate(top_5.iterrows(), 1):
+                        titulo_corto = row['Titulo'][:40] + "..." if len(row['Titulo']) > 40 else row['Titulo']
+                        print(f"  {i}. {titulo_corto} | {row['Kilometraje']}")
             
             # Ordenar vendidas por Fecha_Venta descendente (SIN CAMBIOS)
             if not df_vendidas.empty and 'Fecha_Venta' in df_vendidas.columns:
                 df_vendidas = df_vendidas.sort_values('Fecha_Venta', ascending=False, na_position='last')
                 print(f"ORDENACION: {len(df_vendidas)} vendidas ordenadas por Fecha_Venta DESC")
             
-            # Concatenar: activas arriba, vendidas abajo
+            # Concatenar: activas arriba (ordenadas por KM más a menos), vendidas abajo
             df_ordenado = pd.concat([df_activas, df_vendidas], ignore_index=True)
             
             return df_ordenado
             
         except Exception as e:
             print(f"ERROR ORDENANDO: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return df_historico
 
 def test_google_sheets_data():

@@ -369,37 +369,25 @@ def extract_year_and_km_robust(driver):
             # EXTRAER KILOMETROS - PATRONES CORREGIDOS PARA AMBOS FORMATOS
             km_patterns = [
                 # FORMATO MOTOSPLUS: "Kilómetros: 12400"
-                r'Kilómetros:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'Kilómetros:\s*(\d+)',
-                r'kilometros:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'kilometros:\s*(\d+)',
                 
                 # FORMATO CUIMO: "• KM: 15999"
-                r'•\s*KM:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'•\s*KM:\s*(\d+)',
-                r'•\s*km:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'•\s*km:\s*(\d+)',
                 
                 # FORMATOS ADICIONALES (sin bullet)
-                r'KM:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'KM:\s*(\d+)',
-                r'km:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'km:\s*(\d+)',
                 
                 # FORMATOS CON GUIONES
-                r'-\s*Kilometros:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'-\s*Kilometros:\s*(\d+)',
-                r'-\s*kilometros:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'-\s*kilometros:\s*(\d+)',
-                r'-\s*KM:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'-\s*KM:\s*(\d+)',
-                r'-\s*km:\s*(\d{1,3}(?:\.\d{3})*)',
                 r'-\s*km:\s*(\d+)',
                 
                 # FORMATOS GENERICOS
-                r'(\d{1,3}(?:\.\d{3})*)\s*km',
                 r'(\d+)\s*km',
-                r'(\d{1,3}(?:\.\d{3})*)\s*kilometros',
                 r'(\d+)\s*kilometros',
                 r'(\d+)\s*mil\s*km',
             ]

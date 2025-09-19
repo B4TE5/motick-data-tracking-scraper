@@ -1,948 +1,738 @@
 """
-Scraper - Version Google Sheets OPTIMIZADA
-Extrae datos de motos y los sube directamente a Google Sheets
+Analizador Historico - Version Google Sheets V8.2 CORREGIDO
+Lee datos del scraper desde Google Sheets y actualiza el historico evolutivo
 
-Version: 1.2 - Automatizada para GitHub Actions - OPTIMIZADA PARA VELOCIDAD
-Basado en: SCR_DATA_MOTICK.py original
-OPTIMIZACIONES: Logs limpios + Mayor velocidad sin perder funcionalidad
+CORRECCIONES VERSION 8.2:
+- ARREGLO CRITICO: tuple indices error corregido
+- URL como identificador unico principal (SIN PRECIO)
+- Mantiene hojas originales: Data_Historico
+- Añade Visitas_Totales y Likes_Totales
+- Maneja valores NA correctamente
 """
 
-import time
-import re
-import os
 import sys
+import os
+import time
 import pandas as pd
-from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from tqdm import tqdm
+import re
 import hashlib
+from datetime import datetime, timedelta
+import numpy as np
 
 # Importar modulos locales
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import get_moto_accounts, GOOGLE_SHEET_ID_DATA
+from config import GOOGLE_SHEET_ID_DATA
 from google_sheets_data import GoogleSheetsData
 
-def setup_browser():
-    """Configura navegador Chrome ULTRA RAPIDO"""
-    options = Options()
-    
-    # Configuraciones de maxima velocidad
-    options.add_argument("--headless")  
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-background-timer-throttling")
-    options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--disable-backgrounding-occluded-windows")
-    options.add_argument("--disable-client-side-phishing-detection")
-    options.add_argument("--disable-sync")
-    options.add_argument("--disable-translate")
-    options.add_argument("--hide-scrollbars")
-    options.add_argument("--mute-audio")
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    
-    # Suprimir logs completamente
-    options.add_argument("--log-level=3")
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    
-    browser = webdriver.Chrome(options=options)
-    browser.implicitly_wait(0.3)  # REDUCIDO de 0.5 a 0.3
-    return browser
-
-def safe_navigate(driver, url):
-    """Navega ULTRA RAPIDO sin reintentos innecesarios"""
-    try:
-        driver.get(url)
-        time.sleep(0.2)  # REDUCIDO de 0.3 a 0.2
-        return True
-    except Exception:
+class AnalizadorHistoricoData:
+    def __init__(self):
+        self.tiempo_inicio = datetime.now()
+        
+        # Variables de fecha (se establecen despues)
+        self.fecha_actual = None
+        self.fecha_str = None
+        self.fecha_display = None
+        
+        # Estadisticas de procesamiento
+        self.stats = {
+            'total_archivo_nuevo': 0,
+            'total_historico': 0,
+            'motos_nuevas': 0,
+            'motos_actualizadas': 0,
+            'motos_vendidas': 0,
+            'errores': 0,
+            'tiempo_ejecucion': 0
+        }
+        
+        # Listas para tracking
+        self.motos_nuevas_lista = []
+        self.motos_vendidas_lista = []
+        self.top_likes_crecimiento = []
+        
+        # Google Sheets handler
+        self.gs_handler = None
+        
+    def inicializar_google_sheets(self):
+        """Inicializa la conexion a Google Sheets"""
         try:
-            driver.get(url)
-            time.sleep(0.3)  # REDUCIDO de 0.5 a 0.3
-            return True
-        except:
-            return False
-
-def accept_cookies(driver):
-    """Acepta cookies de forma ultrarapida"""
-    try:
-        cookie_button = WebDriverWait(driver, 2).until(  # REDUCIDO de 3 a 2
-            EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
-        )
-        cookie_button.click()
-        time.sleep(0.3)  # REDUCIDO de 0.5 a 0.3
-        return True
-    except:
-        return False
-
-def extract_title_robust(driver):
-    """Extrae titulo con MULTIPLES ESTRATEGIAS ROBUSTAS"""
-    
-    # ESTRATEGIA 1: Selectores H1 genericos
-    h1_selectors = [
-        "h1",
-        "h1[class*='title']",
-        "h1[class*='Title']",
-        "[class*='title'] h1",
-        "[class*='Title'] h1"
-    ]
-    
-    for selector in h1_selectors:
-        try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            for element in elements:
-                text = element.text.strip()
-                if text and len(text) > 3 and len(text) < 100:
-                    # Validar que parece un titulo de moto
-                    if any(word.upper() in text.upper() for word in ['HONDA', 'YAMAHA', 'KAWASAKI', 'SUZUKI', 'BMW', 'KTM', 'DUCATI', 'PIAGGIO', 'VESPA', 'APRILIA', 'TRIUMPH']):
-                        return text
-                    elif len(text) > 10:  # Si es suficientemente largo, probablemente es el titulo
-                        return text
-        except:
-            continue
-    
-    # ESTRATEGIA 2: Buscar en metadatos
-    try:
-        title_meta = driver.find_element(By.XPATH, "//meta[@property='og:title']")
-        content = title_meta.get_attribute("content")
-        if content and len(content) > 5:
-            return content.split(' - ')[0].strip()  # Quitar " - Wallapop"
-    except:
-        pass
-    
-    # ESTRATEGIA 3: Extraer desde la descripcion (primera linea)
-    try:
-        desc_selectors = [
-            "[class*='description']",
-            "section[class*='description']", 
-            "div[class*='description']",
-            "[class*='Description']"
-        ]
-        
-        for selector in desc_selectors:
-            try:
-                element = driver.find_element(By.CSS_SELECTOR, selector)
-                desc_text = element.text.strip()
-                if desc_text:
-                    first_line = desc_text.split('\n')[0].strip()
-                    if len(first_line) > 5 and len(first_line) < 80:
-                        return first_line
-            except:
-                continue
-    except:
-        pass
-    
-    return "Titulo no encontrado"
-
-def extract_price_robust(driver):
-    """Extrae precio usando SELECTORES EXITOSOS del scraper de COCHES"""
-    
-    # ESPERAR A QUE CARGUEN LOS PRECIOS (copiado del scraper de coches)
-    try:
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//*[contains(text(), '€')]"))
-        )
-    except:
-        pass
-    
-    # ESTRATEGIA 1: SELECTORES CSS ESPECIFICOS DE WALLAPOP (del scraper de coches exitoso)
-    price_selectors = [
-        "span.item-detail-price_ItemDetailPrice--standardFinanced__f9ceG",
-        ".item-detail-price_ItemDetailPrice--standardFinanced__f9ceG", 
-        "span.item-detail-price_ItemDetailPrice--standard__fMa16",
-        "span.item-detail-price_ItemDetailPrice--financed__LgMRH",
-        ".item-detail-price_ItemDetailPrice--financed__LgMRH",
-        "[class*='ItemDetailPrice']",
-        "[class*='standardFinanced'] span",
-        "[class*='financed'] span"
-    ]
-    
-    for selector in price_selectors:
-        try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            for element in elements:
-                text = element.text.strip()
-                if text and '€' in text:
-                    price = extract_price_from_text_wallapop(text)
-                    if price != "No especificado":
-                        return price
-        except:
-            continue
-    
-    # ESTRATEGIA 2: XPATH POR ETIQUETA "Precio al contado" (del scraper de coches)
-    try:
-        contado_elements = driver.find_elements(By.XPATH, 
-            "//span[text()='Precio al contado']/following::span[contains(@class, 'ItemDetailPrice') and contains(text(), '€')]"
-        )
-        
-        if contado_elements:
-            raw_price = contado_elements[0].text.strip()
-            return extract_price_from_text_wallapop(raw_price)
-    except:
-        pass
-    
-    # ESTRATEGIA 3: BUSCAR CUALQUIER PRECIO EN WALLAPOP (metodo exitoso del scraper de coches)
-    try:
-        price_elements = driver.find_elements(By.XPATH, "//*[contains(text(), '€')]")
-        
-        valid_prices = []
-        for elem in price_elements[:10]:
-            try:
-                text = elem.text.strip().replace('&nbsp;', ' ').replace('\xa0', ' ')
-                if not text:
-                    continue
-                
-                # REGEX PARA CAPTURAR PRECIOS REALISTAS DE MOTOS
-                price_patterns = [
-                    r'(\d{1,3}(?:\.\d{3})+)\s*€',
-                    r'(\d{1,6})\s*€'
-                ]
-                
-                for pattern in price_patterns:
-                    price_matches = re.findall(pattern, text)
-                    for price_match in price_matches:
-                        try:
-                            price_clean = price_match.replace('.', '')
-                            price_value = int(price_clean)
-                            
-                            # RANGO PARA MOTOS: 500€ - 60,000€
-                            if 500 <= price_value <= 60000:
-                                formatted_price = f"{price_value:,}".replace(',', '.') + " €" if price_value >= 1000 else f"{price_value} €"
-                                valid_prices.append((price_value, formatted_price))
-                        except:
-                            continue
-            except:
-                continue
-        
-        # Tomar el precio mas alto como precio principal
-        if valid_prices:
-            valid_prices = sorted(set(valid_prices), key=lambda x: x[0], reverse=True)
-            return valid_prices[0][1]
-                    
-    except:
-        pass
-    
-    return "No especificado"
-
-def extract_price_from_text_wallapop(text):
-    """Extrae precio de Wallapop - ADAPTADO del scraper de coches exitoso"""
-    if not text:
-        return "No especificado"
-    
-    # Limpiar texto (como en el scraper de coches exitoso)
-    clean_text = text.replace('&nbsp;', ' ').replace('\xa0', ' ').strip()
-    if not clean_text:
-        return "No especificado"
-    
-    # REGEX ESPECIFICOS PARA WALLAPOP (copiados del scraper de coches exitoso)
-    price_patterns = [
-        r'(\d{1,3}(?:\.\d{3})+)\s*€',           # "7.690 €"
-        r'(\d{4,6})\s*€',                       # "7690 €"
-        r'(\d{1,2})\s*\.\s*(\d{3})\s*€',        # "7 . 690 €"
-        r'(\d{1,2}),(\d{3})\s*€',               # "7,690 €"
-        r'€\s*(\d{1,2}\.?\d{3,6})',             # "€ 7690"
-        r'(\d{1,2}\.?\d{3,6})\s*euros?',        # "7690 euros"
-    ]
-    
-    for pattern in price_patterns:
-        matches = re.finditer(pattern, clean_text, re.IGNORECASE)
-        for match in matches:
-            try:
-                if len(match.groups()) == 2:  # Formato como 7.690
-                    price_value = int(match.group(1) + match.group(2))
+            credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            sheet_id = os.getenv('GOOGLE_SHEET_ID') or GOOGLE_SHEET_ID_DATA
+            
+            if not credentials_json:
+                # Para testing local
+                credentials_file = "../credentials/service-account.json"
+                if os.path.exists(credentials_file):
+                    self.gs_handler = GoogleSheetsData(
+                        credentials_file=credentials_file,
+                        sheet_id=sheet_id
+                    )
                 else:
-                    price_str = match.group(1).replace('.', '').replace(',', '')
-                    price_value = int(price_str)
-                
-                # RANGO PARA MOTOS: 500€ - 60,000€
-                if 500 <= price_value <= 60000:
-                    return f"{price_value:,} €".replace(',', '.')
+                    raise Exception("No se encontraron credenciales locales")
+            else:
+                # Para GitHub Actions
+                self.gs_handler = GoogleSheetsData(
+                    credentials_json_string=credentials_json,
+                    sheet_id=sheet_id
+                )
+            
+            # Probar conexion
+            if not self.gs_handler.test_connection():
+                raise Exception("No se pudo conectar a Google Sheets")
+            
+            print("CONEXION: Google Sheets inicializada correctamente")
+            return True
+            
+        except Exception as e:
+            print(f"ERROR INICIALIZACION: {str(e)}")
+            return False
+    
+    def crear_id_unico_real(self, fila):
+        """
+        Crea ID unico basado SOLO en: URL + cuenta + titulo + km
+        CORRECCION CRITICA V8.2: NO INCLUYE PRECIO (puede cambiar)
+        """
+        try:
+            url = str(fila.get('URL', '')).strip()
+            cuenta = str(fila.get('Cuenta', '')).strip()
+            titulo = str(fila.get('Titulo', '')).strip()
+            km = str(fila.get('Kilometraje', '')).strip()
+            
+            # Normalizar titulo (quitar caracteres especiales)
+            titulo_limpio = re.sub(r'[^\w\s]', '', titulo.lower())[:30]
+            km_limpio = re.sub(r'[^\d]', '', km)
+            
+            # Crear clave unica SIN PRECIO
+            clave_unica = f"{url}_{cuenta}_{titulo_limpio}_{km_limpio}"
+            
+            # Hash para ID manejable
+            return hashlib.md5(clave_unica.encode()).hexdigest()[:12]
+            
+        except Exception as e:
+            # Fallback con URL + timestamp
+            url_safe = str(fila.get('URL', str(time.time())))
+            return hashlib.md5(f"{url_safe}_{time.time()}".encode()).hexdigest()[:12]
+    
+    def extraer_fecha_de_datos(self, df_nuevo):
+        """Extrae la fecha de los datos del scraper"""
+        try:
+            if 'Fecha_Extraccion' in df_nuevo.columns:
+                fecha_str = df_nuevo['Fecha_Extraccion'].iloc[0]
+                if isinstance(fecha_str, str) and '/' in fecha_str:
+                    fecha_parte = fecha_str.split(' ')[0]  # Quitar hora si existe
+                    fecha_obj = datetime.strptime(fecha_parte, "%d/%m/%Y")
+                    return fecha_obj, fecha_parte
+            
+            # Fallback: usar fecha actual
+            fecha_actual = datetime.now()
+            fecha_display = fecha_actual.strftime("%d/%m/%Y")
+            print(f"ADVERTENCIA: Usando fecha actual {fecha_display}")
+            return fecha_actual, fecha_display
+            
+        except Exception as e:
+            print(f"ADVERTENCIA: Error extrayendo fecha: {e}, usando fecha actual")
+            fecha_actual = datetime.now()
+            return fecha_actual, fecha_actual.strftime("%d/%m/%Y")
+    
+    def mostrar_header(self):
+        """Muestra el header del sistema"""
+        print("="*80)
+        print("ANALIZADOR HISTORICO V8.2 - VERSION GOOGLE SHEETS CORREGIDA")
+        print("="*80)
+        print(f"Fecha procesamiento: {self.fecha_display}")
+        print("Logica: URL como identificador unico principal (SIN PRECIO)")
+        print("Fuente: Google Sheets")
+        print("Hojas: Data_Historico (principal), SCR (datos diarios)")
+        print()
+        
+    def normalizar_nombres_columnas(self, df):
+        """Normaliza los nombres de columnas a los esperados"""
+        mapeo_columnas = {
+            'ID_Moto': 'ID_Real_Wallapop',
+            'id_moto': 'ID_Real_Wallapop',
+            'ID': 'ID_Real_Wallapop',
+            'id': 'ID_Real_Wallapop',
+            'titulo': 'Titulo',
+            'TITULO': 'Titulo',
+            'precio': 'Precio',
+            'PRECIO': 'Precio',
+            'ano': 'Ano',
+            'Ano': 'Ano',
+            'ANO': 'Ano',
+            'year': 'Ano',
+            'kilometraje': 'Kilometraje',
+            'KILOMETRAJE': 'Kilometraje',
+            'km': 'Kilometraje',
+            'KM': 'Kilometraje',
+            'visitas': 'Visitas',
+            'VISITAS': 'Visitas',
+            'views': 'Visitas',
+            'VIEWS': 'Visitas',
+            'likes': 'Likes',
+            'LIKES': 'Likes',
+            'url': 'URL',
+            'Url': 'URL',
+            'cuenta': 'Cuenta',
+            'CUENTA': 'Cuenta',
+            'account': 'Cuenta'
+        }
+        
+        df = df.rename(columns=mapeo_columnas)
+        return df
+    
+    def validar_estructura_archivo(self, df):
+        """Valida que el archivo tenga la estructura esperada"""
+        print(f"Columnas encontradas: {list(df.columns)}")
+        
+        df = self.normalizar_nombres_columnas(df)
+        
+        # Columnas criticas
+        columnas_minimas = ['Titulo', 'Visitas', 'Likes', 'URL']
+        columnas_faltantes = [col for col in columnas_minimas if col not in df.columns]
+        
+        if columnas_faltantes:
+            raise ValueError(f"Columnas criticas faltantes: {columnas_faltantes}")
+        
+        # Agregar columnas faltantes con valores por defecto
+        columnas_deseadas = {
+            'Cuenta': 'No especificado',
+            'Precio': 'No especificado', 
+            'Ano': 'No especificado',
+            'Kilometraje': 'No especificado'
+        }
+        
+        for col, valor_default in columnas_deseadas.items():
+            if col not in df.columns:
+                df[col] = valor_default
+                print(f"Columna '{col}' anadida con valor por defecto")
+        
+        # Limpiar URLs vacias
+        urls_vacias = df['URL'].isnull().sum() + (df['URL'] == 'No especificado').sum()
+        if urls_vacias > 0:
+            print(f"ADVERTENCIA: {urls_vacias} motos con URL vacia seran ignoradas")
+            df = df[df['URL'].notna()]
+            df = df[df['URL'] != 'No especificado']
+        
+        return df
+        
+    def leer_datos_scraper(self):
+        """CORREGIDO: Lee los datos mas recientes del scraper desde Google Sheets"""
+        try:
+            # ARREGLO CRITICO: Verificar que el metodo devuelve DataFrame, no tupla
+            result = self.gs_handler.leer_datos_scraper_reciente()
+            
+            # VALIDACION: Verificar que result es una tupla de (DataFrame, fecha_str)
+            if isinstance(result, tuple) and len(result) == 2:
+                df_nuevo, fecha_str = result
+                print(f"DEBUG: Tipo de df_nuevo: {type(df_nuevo)}")
+                print(f"DEBUG: Tipo de fecha_str: {type(fecha_str)}")
+            else:
+                raise Exception(f"leer_datos_scraper_reciente devolvio tipo inesperado: {type(result)}")
+            
+            # VALIDACION: Asegurar que df_nuevo es un DataFrame
+            if not isinstance(df_nuevo, pd.DataFrame):
+                raise Exception(f"df_nuevo no es DataFrame, es: {type(df_nuevo)}")
+            
+            if df_nuevo is None or df_nuevo.empty:
+                raise Exception("No se encontraron datos del scraper en Google Sheets")
+            
+            df_nuevo = self.validar_estructura_archivo(df_nuevo)
+            
+            # Crear ID_Unico_Real para cada moto (SIN PRECIO)
+            df_nuevo['ID_Unico_Real'] = df_nuevo.apply(self.crear_id_unico_real, axis=1)
+            
+            # Limpiar columnas numericas
+            df_nuevo['Visitas'] = pd.to_numeric(df_nuevo['Visitas'], errors='coerce').fillna(0).astype(int)
+            df_nuevo['Likes'] = pd.to_numeric(df_nuevo['Likes'], errors='coerce').fillna(0).astype(int)
+            
+            self.stats['total_archivo_nuevo'] = len(df_nuevo)
+            print(f"Motos en datos del scraper: {self.stats['total_archivo_nuevo']:,}")
+            
+            # Extraer fecha
+            self.fecha_actual, self.fecha_display = self.extraer_fecha_de_datos(df_nuevo)
+            self.fecha_str = self.fecha_actual.strftime("%Y%m%d")
+            
+            return df_nuevo
+            
+        except Exception as e:
+            print(f"ERROR leyendo datos del scraper: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+            
+    def obtener_columnas_fechas(self, df):
+        """Obtiene las columnas de visitas y likes por fecha del historico"""
+        columnas_visitas = [col for col in df.columns if col.startswith('Visitas_') and not col.endswith('_Totales')]
+        columnas_likes = [col for col in df.columns if col.startswith('Likes_') and not col.endswith('_Totales')]
+        
+        columnas_visitas.sort()
+        columnas_likes.sort()
+        return columnas_visitas, columnas_likes
+    
+    def obtener_fecha_anterior(self, columnas_fechas):
+        """Obtiene la fecha anterior mas reciente de las columnas (excluyendo la fecha actual)"""
+        if not columnas_fechas:
+            return None
+        
+        fechas = []
+        for col in columnas_fechas:
+            try:
+                fecha_str = col.split('_')[1]
+                fecha_obj = datetime.strptime(fecha_str, "%d/%m/%Y")
+                # IMPORTANTE: Excluir la fecha actual para evitar autocomparacion
+                if fecha_obj.strftime("%d/%m/%Y") != self.fecha_display:
+                    fechas.append(fecha_obj)
             except:
                 continue
+        
+        if fechas:
+            return max(fechas).strftime("%d/%m/%Y")
+        return None
     
-    return "No especificado"
-
-def extract_likes_robust(driver):
-    """Extrae likes con MULTIPLES ESTRATEGIAS"""
-    
-    # ESTRATEGIA 1: Selectores especificos de favoritos
-    like_selectors = [
-        "button[aria-label*='favorite'] span",
-        "button[aria-label*='Favorite'] span", 
-        "[aria-label*='favorite']",
-        "[aria-label*='Favorite']",
-        "button[class*='favorite'] span",
-        "button[class*='heart'] span",
-        "[class*='favorite-counter']",
-        "[class*='heart']"
-    ]
-    
-    for selector in like_selectors:
+    def limpiar_columnas_numericas(self, df):
+        """Limpia y convierte todas las columnas numericas a los tipos correctos"""
         try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            for element in elements:
-                # Buscar numero en el texto
-                text = element.text.strip()
-                if text.isdigit() and 0 <= int(text) <= 1000:
-                    return int(text)
-                
-                # Buscar en aria-label
-                aria_label = element.get_attribute('aria-label') or ''
-                numbers = re.findall(r'(\d+)', aria_label)
-                if numbers:
-                    likes_value = int(numbers[0])
-                    if 0 <= likes_value <= 1000:
-                        return likes_value
-        except:
-            continue
-    
-    # ESTRATEGIA 2: Buscar patron en todo el HTML
-    try:
-        page_source = driver.page_source
-        like_patterns = [
-            r'favorites.*?(\d+)',
-            r'favorite.*?(\d+)',
-            r'heart.*?(\d+)',
-            r'(\d+).*?favorite',
-            r'(\d+).*?heart'
-        ]
-        
-        for pattern in like_patterns:
-            matches = re.finditer(pattern, page_source, re.IGNORECASE)
-            for match in matches:
-                try:
-                    likes_value = int(match.group(1))
-                    if 0 <= likes_value <= 1000:
-                        return likes_value
-                except:
-                    continue
-    except:
-        pass
-    
-    return 0
-
-def extract_year_and_km_robust(driver):
-    """Extrae año y KM de la DESCRIPCION de Wallapop - CORREGIDO PARA KM = 0"""
-    year = "No especificado"
-    km = "No especificado"
-    
-    try:
-        # EXTRAER DE LA DESCRIPCION usando selector especifico de Wallapop
-        description_selectors = [
-            "section.item-detail_ItemDetailTwoColumns__description__0DKb0",
-            ".item-detail_ItemDetailTwoColumns__description__0DKb0",
-            "[class*='description']",
-            "section[class*='description']"
-        ]
-        
-        description_text = ""
-        for selector in description_selectors:
-            try:
-                description_element = driver.find_element(By.CSS_SELECTOR, selector)
-                description_text = description_element.text
-                if description_text:
-                    break
-            except:
-                continue
-        
-        if description_text:
-            # EXTRAER KILOMETROS de la descripcion - PERMITIR KM = 0
-            km_patterns = [
-                r'-\s*Kilometros:\s*(\d{1,3}(?:\.\d{3})*)',      # "- Kilometros: 4.500"
-                r'-\s*Kilometros:\s*(\d+)',                      # "- Kilometros: 0" PERMITIR 0
-                r'-\s*kilometros:\s*(\d{1,3}(?:\.\d{3})*)',      # "- kilometros: 4.500"
-                r'-\s*kilometros:\s*(\d+)',                      # "- kilometros: 0" PERMITIR 0  
-                r'Kilometros:\s*(\d{1,3}(?:\.\d{3})*)',          # "Kilometros: 4.500"
-                r'Kilometros:\s*(\d+)',                          # "Kilometros: 0" PERMITIR 0
-                r'kilometros:\s*(\d{1,3}(?:\.\d{3})*)',          # "kilometros: 4.500"
-                r'kilometros:\s*(\d+)',                          # "kilometros: 0" PERMITIR 0
-                r'KM:\s*(\d{1,3}(?:\.\d{3})*)',                  # "KM: 4.500"
-                r'KM:\s*(\d+)',                                  # "KM: 0" PERMITIR 0
-                r'km:\s*(\d{1,3}(?:\.\d{3})*)',                  # "km: 4.500"
-                r'km:\s*(\d+)',                                  # "km: 0" PERMITIR 0
-                r'(\d{1,3}(?:\.\d{3})*)\s*km',                   # "4.500 km"
-                r'(\d+)\s*km',                                   # "0 km" PERMITIR 0
-                r'(\d{1,3}(?:\.\d{3})*)\s*kilometros',           # "4.500 kilometros"
-                r'(\d+)\s*kilometros',                           # "0 kilometros" PERMITIR 0
-                r'(\d+)\s*mil\s*km',                             # "42 mil km"
-            ]
+            print("Limpiando columnas numericas...")
             
-            for pattern in km_patterns:
-                match = re.search(pattern, description_text, re.IGNORECASE)
-                if match:
-                    try:
-                        km_text = match.group(1)
-                        
-                        # Manejar diferentes formatos
-                        if 'mil' in pattern.lower():
-                            # Formato "42 mil km"
-                            km_value = int(km_text) * 1000
-                        else:
-                            # Formato normal con puntos como separadores de miles
-                            km_value = int(km_text.replace('.', ''))
-                        
-                        # PERMITIR KM = 0 como valor valido
-                        if 0 <= km_value <= 999999:  # CAMBIADO: ahora incluye 0
-                            if km_value == 0:
-                                km = "0 km"  # Formato especifico para 0 km
-                            else:
-                                km = f"{km_value:,} km".replace(',', '.')
-                            break
-                            
-                    except:
-                        continue
+            # Obtener todas las columnas de visitas y likes
+            columnas_visitas, columnas_likes = self.obtener_columnas_fechas(df)
             
-            # EXTRAER AÑO de la descripcion
-            year_patterns = [
-                r'-\s*Año:\s*(\d{4})',                          # "- Año: 2023"
-                r'-\s*año:\s*(\d{4})',                          # "- año: 2023"
-                r'Año:\s*(\d{4})',                              # "Año: 2023"
-                r'año:\s*(\d{4})',                              # "año: 2023"
-                r'modelo\s+(\d{4})',                            # "modelo 2023"
-                r'del\s+(\d{4})',                               # "del 2023"
-                r'(\d{4})\s*(?:cc|cilindros)',                  # "2023 cc"
-            ]
+            # Limpiar columnas basicas
+            columnas_numericas_basicas = ['Visitas', 'Likes', 'Variacion_Likes']
+            for col in columnas_numericas_basicas:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
-            for pattern in year_patterns:
-                match = re.search(pattern, description_text, re.IGNORECASE)
-                if match:
-                    try:
-                        year_value = int(match.group(1))
-                        if 1990 <= year_value <= 2025:
-                            year = str(year_value)
-                            break
-                    except:
-                        continue
-        
-        # Si no encuentra en descripcion, buscar en HTML general (fallback)
-        if km == "No especificado":
-            try:
-                html_content = driver.page_source
-                km_patterns_html = [
-                    r'Kilometros["\s:>]*</span><span[^>]*>(\d+(?:[\.\s]\d+)*)</span>',
-                    r'kilometros["\s:>]*</span><span[^>]*>(\d+(?:[\.\s]\d+)*)</span>',
-                    r'>(\d+)\s*km',  # PERMITIR 0 KM tambien en HTML
-                ]
-                
-                for pattern in km_patterns_html:
-                    matches = re.findall(pattern, html_content, re.IGNORECASE)
-                    for match in matches:
-                        try:
-                            km_clean = match.replace('.', '').replace(',', '').replace(' ', '')
-                            km_value = int(km_clean)
-                            if 0 <= km_value <= 999999:  # INCLUIR 0
-                                if km_value == 0:
-                                    km = "0 km"
-                                else:
-                                    km = f"{km_value:,} km".replace(',', '.')
-                                break
-                        except:
-                            continue
-                    if km != "No especificado":
-                        break
-            except:
-                pass
+            # Limpiar columnas totales
+            if 'Visitas_Totales' in df.columns:
+                df['Visitas_Totales'] = pd.to_numeric(df['Visitas_Totales'], errors='coerce').fillna(0).astype(int)
+            if 'Likes_Totales' in df.columns:
+                df['Likes_Totales'] = pd.to_numeric(df['Likes_Totales'], errors='coerce').fillna(0).astype(int)
+            
+            # Limpiar TODAS las columnas de fechas (visitas y likes)
+            todas_columnas_fechas = columnas_visitas + columnas_likes
+            for col in todas_columnas_fechas:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
                     
-    except Exception as e:
-        pass
-    
-    return year, km
-
-def extract_views_robust(driver):
-    """Extrae visitas con multiples estrategias - CORREGIDO PARA FORMATO K"""
-    
-    # ESTRATEGIA 1: Selectores especificos
-    view_selectors = [
-        'span[aria-label="Views"]',
-        '[aria-label*="Views"]',
-        '[aria-label*="views"]',
-        '[class*="views"]',
-        '[class*="Views"]'
-    ]
-    
-    for selector in view_selectors:
-        try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            for element in elements:
-                text = element.text.strip()
-                
-                # MANEJAR FORMATO K (1.1k = 1,100)
-                if 'k' in text.lower():
-                    try:
-                        # Extraer numero antes de 'k'
-                        k_match = re.search(r'(\d+(?:\.\d+)?)\s*k', text.lower())
-                        if k_match:
-                            k_value = float(k_match.group(1))
-                            views = int(k_value * 1000)
-                            if 0 <= views <= 500000:  # Rango ampliado
-                                return views
-                    except:
-                        pass
-                
-                # FORMATO NORMAL (numero entero) - CAMBIADO elif por if
-                if text.isdigit():
-                    views = int(text)
-                    if 0 <= views <= 500000:  # Rango ampliado
-                        return views
-                        
-                # Buscar en aria-label
-                aria_label = element.get_attribute('aria-label') or ''
-                
-                # MANEJAR FORMATO K EN ARIA-LABEL
-                if 'k' in aria_label.lower():
-                    try:
-                        k_match = re.search(r'(\d+(?:\.\d+)?)\s*k', aria_label.lower())
-                        if k_match:
-                            k_value = float(k_match.group(1))
-                            views = int(k_value * 1000)
-                            if 0 <= views <= 500000:
-                                return views
-                    except:
-                        continue
-                
-                # FORMATO NORMAL EN ARIA-LABEL
-                numbers = re.findall(r'(\d+)', aria_label)
-                if numbers:
-                    views_value = int(numbers[0])
-                    if 0 <= views_value <= 500000:
-                        return views_value
-        except:
-            continue
-    
-    # ESTRATEGIA 2: Buscar en HTML completo formato K
-    try:
-        page_source = driver.page_source
-        
-        # Buscar patrones con K
-        k_patterns = [
-            r'(\d+(?:\.\d+)?)\s*k\s*views',
-            r'views[^>]*>(\d+(?:\.\d+)?)\s*k',
-            r'(\d+(?:\.\d+)?)\s*k\s*visitas'
-        ]
-        
-        for pattern in k_patterns:
-            matches = re.finditer(pattern, page_source, re.IGNORECASE)
-            for match in matches:
-                try:
-                    k_value = float(match.group(1))
-                    views = int(k_value * 1000)
-                    if 0 <= views <= 500000:
-                        return views
-                except:
-                    continue
-        
-        # Buscar patrones normales
-        view_patterns = [
-            r'views.*?(\d+)',
-            r'view.*?(\d+)',
-            r'(\d+).*?view'
-        ]
-        
-        for pattern in view_patterns:
-            matches = re.finditer(pattern, page_source, re.IGNORECASE)
-            for match in matches:
-                try:
-                    views_value = int(match.group(1))
-                    if 0 <= views_value <= 500000:
-                        return views_value
-                except:
-                    continue
-    except:
-        pass
-    
-    return 0
-
-def create_moto_id(title, price, year, km):
-    """Crea ID unico para detectar duplicados"""
-    try:
-        normalized_title = re.sub(r'[^\w\s]', '', title.lower().strip())[:20]
-        normalized_price = re.sub(r'[^\d]', '', price)
-        unique_string = f"{normalized_title}_{normalized_price}_{year}_{km}".replace(' ', '_')
-        return hashlib.md5(unique_string.encode()).hexdigest()[:10]
-    except:
-        return hashlib.md5(str(time.time()).encode()).hexdigest()[:10]
-
-def find_and_click_load_more(driver):
-    """
-    Busca y hace clic en 'Ver mas productos' - VERSION OPTIMIZADA SIN DEBUG
-    """
-    
-    # SELECTORES CORREGIDOS basados en el HTML real
-    selectors = [
-        ('css', 'walla-button[text="Ver mas productos"]'),
-        ('css', 'walla-button[text*="Ver mas"]'),
-        ('css', 'button.walla-button__button'),
-        ('css', '.walla-button__button'),
-        ('xpath', '//walla-button[@text="Ver mas productos"]'),
-        ('xpath', '//walla-button[contains(@text, "Ver mas")]'),
-        ('xpath', '//span[text()="Ver mas productos"]/ancestor::button'),
-        ('xpath', '//span[contains(text(), "Ver mas")]/ancestor::button'),
-        ('xpath', '//span[text()="Ver mas productos"]/ancestor::walla-button'),
-        ('css', '.d-flex.justify-content-center walla-button'),
-        ('css', 'div[class*="justify-content-center"] walla-button'),
-        ('xpath', '//button[contains(@class, "walla-button")]'),
-        ('xpath', '//*[contains(text(), "Ver mas productos")]'),
-        ('css', '[class*="load-more"]'),
-        ('css', '[class*="more-items"]')
-    ]
-    
-    for selector_type, selector in selectors:
-        try:
-            if selector_type == 'css':
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            else:  # xpath
-                elements = driver.find_elements(By.XPATH, selector)
+            print(f"Columnas numericas limpiadas: {len(todas_columnas_fechas)} columnas de fechas")
+            return df
             
-            for element in elements:
+        except Exception as e:
+            print(f"ADVERTENCIA: Error limpiando columnas: {str(e)}")
+            return df
+        
+    def primera_ejecucion(self, df_nuevo):
+        """Crea el historico por primera vez con formato de columnas por fecha"""
+        print("Primera ejecucion - Creando historico inicial")
+        
+        df_historico = df_nuevo.copy()
+        
+        df_historico['Primera_Deteccion'] = self.fecha_display
+        df_historico['Estado'] = 'activa'
+        df_historico['Fecha_Venta'] = pd.NA
+        
+        col_visitas_hoy = f"Visitas_{self.fecha_display}"
+        col_likes_hoy = f"Likes_{self.fecha_display}"
+        
+        df_historico[col_visitas_hoy] = df_historico['Visitas']
+        df_historico[col_likes_hoy] = df_historico['Likes']
+        
+        # Agregar columnas totales
+        df_historico['Visitas_Totales'] = df_historico['Visitas']
+        df_historico['Likes_Totales'] = df_historico['Likes']
+        
+        df_historico = df_historico.drop(['Visitas', 'Likes'], axis=1)
+        df_historico['Variacion_Likes'] = 0
+        
+        # Ordenar columnas correctamente
+        columnas_orden = [
+            'ID_Unico_Real', 'Cuenta', 'Titulo', 'Precio', 'Kilometraje',
+            'Primera_Deteccion', 'Estado', 'Fecha_Venta', 'URL',
+            'Visitas_Totales', 'Likes_Totales',
+            col_visitas_hoy, col_likes_hoy, 'Variacion_Likes'
+        ]
+        
+        # Solo usar columnas que existen
+        columnas_existentes = [col for col in columnas_orden if col in df_historico.columns]
+        df_historico = df_historico[columnas_existentes]
+        
+        self.stats['total_historico'] = len(df_historico)
+        self.stats['motos_nuevas'] = len(df_historico)
+        self.motos_nuevas_lista = df_historico[['Titulo', 'Cuenta', 'Precio']].to_dict('records')
+        
+        return df_historico
+        
+    def leer_historico_existente(self):
+        """Lee el historico existente desde Google Sheets"""
+        try:
+            df_historico = self.gs_handler.leer_datos_historico()
+            
+            if df_historico is None:
+                print("AVISO: No existe historico previo - sera creado en primera ejecucion")
+                return None
+            
+            # Verificar que tiene las columnas necesarias
+            columnas_requeridas = ['URL', 'Estado']
+            columnas_faltantes = [col for col in columnas_requeridas if col not in df_historico.columns]
+            if columnas_faltantes:
+                raise Exception(f"Columnas faltantes en historico: {columnas_faltantes}")
+            
+            self.stats['total_historico'] = len(df_historico)
+            print(f"Motos en historico: {self.stats['total_historico']:,}")
+            
+            # Limpiar columnas numericas
+            df_historico = self.limpiar_columnas_numericas(df_historico)
+            
+            return df_historico
+                
+        except Exception as e:
+            print(f"ERROR leyendo historico: {str(e)}")
+            raise
+            
+    def procesar_motos_nuevas_y_existentes(self, df_nuevo, df_historico):
+        """
+        LOGICA CORREGIDA V8.2: USA URLs como identificador principal
+        ARREGLO: Manejo correcto de DataFrame vs tupla
+        """
+        
+        try:
+            # VALIDACION CRITICA: Verificar tipos
+            if not isinstance(df_nuevo, pd.DataFrame):
+                raise TypeError(f"df_nuevo debe ser DataFrame, recibido: {type(df_nuevo)}")
+            if not isinstance(df_historico, pd.DataFrame):
+                raise TypeError(f"df_historico debe ser DataFrame, recibido: {type(df_historico)}")
+                
+            col_visitas_hoy = f"Visitas_{self.fecha_display}"
+            col_likes_hoy = f"Likes_{self.fecha_display}"
+            
+            print(f"Anadiendo columnas: {col_visitas_hoy}, {col_likes_hoy}")
+            
+            columnas_visitas, columnas_likes = self.obtener_columnas_fechas(df_historico)
+            fecha_anterior = self.obtener_fecha_anterior(columnas_visitas)
+            
+            print(f"Fechas anteriores detectadas: {len(columnas_visitas)} dias de datos")
+            if fecha_anterior:
+                print(f"Comparando con: {fecha_anterior}")
+            
+            # Verificar si las columnas de hoy ya existen
+            if col_visitas_hoy in df_historico.columns or col_likes_hoy in df_historico.columns:
+                print(f"ADVERTENCIA: Las columnas para {self.fecha_display} ya existen")
+                print("Se sobrescribiran los datos existentes")
+            
+            # URL COMO IDENTIFICADOR PRINCIPAL - ARREGLO CRITICO
+            urls_historico = set(df_historico['URL'].values)
+            urls_nuevos = set(df_nuevo['URL'].values)  # ESTA ERA LA LINEA QUE FALLABA
+            
+            motos_nuevas_urls = urls_nuevos - urls_historico
+            motos_existentes_urls = urls_nuevos & urls_historico
+            motos_vendidas_urls = urls_historico - urls_nuevos
+            
+            print(f"Analisis de cambios:")
+            print(f"    • Nuevas: {len(motos_nuevas_urls)}")
+            print(f"    • Existentes: {len(motos_existentes_urls)}")
+            print(f"    • Posibles ventas: {len(motos_vendidas_urls)}")
+            
+            df_actualizado = df_historico.copy()
+            df_actualizado[col_visitas_hoy] = pd.NA
+            df_actualizado[col_likes_hoy] = pd.NA
+            
+            # PROCESAR MOTOS EXISTENTES (USAR URL)
+            for url_moto in motos_existentes_urls:
                 try:
-                    if not element.is_displayed() or not element.is_enabled():
-                        continue
+                    fila_nueva = df_nuevo[df_nuevo['URL'] == url_moto].iloc[0]
+                    visitas_nuevas = int(fila_nueva['Visitas']) if pd.notna(fila_nueva['Visitas']) else 0
+                    likes_nuevos = int(fila_nueva['Likes']) if pd.notna(fila_nueva['Likes']) else 0
                     
-                    # Verificar texto si es necesario
-                    element_text = element.text.strip().lower()
-                    if 'ver mas' in element_text or 'ver más' in element_text or not element_text:
-                        # Scroll y clic
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                        time.sleep(0.2)  # REDUCIDO de 0.5 a 0.2
-                        
-                        try:
-                            element.click()
-                            time.sleep(0.5)  # REDUCIDO de 1 a 0.5
-                            return True
-                        except:
+                    mask = df_actualizado['URL'] == url_moto
+                    df_actualizado.loc[mask, col_visitas_hoy] = visitas_nuevas
+                    df_actualizado.loc[mask, col_likes_hoy] = likes_nuevos
+                    df_actualizado.loc[mask, 'Estado'] = 'activa'
+                    
+                    # Actualizar totales
+                    if 'Visitas_Totales' in df_actualizado.columns:
+                        df_actualizado.loc[mask, 'Visitas_Totales'] = visitas_nuevas
+                    if 'Likes_Totales' in df_actualizado.columns:
+                        df_actualizado.loc[mask, 'Likes_Totales'] = likes_nuevos
+                    
+                    self.stats['motos_actualizadas'] += 1
+                    
+                    # Calcular variacion de likes respecto a fecha anterior
+                    if fecha_anterior:
+                        col_likes_anterior = f"Likes_{fecha_anterior}"
+                        if col_likes_anterior in df_actualizado.columns:
                             try:
-                                driver.execute_script("arguments[0].click();", element)
-                                time.sleep(0.5)  # REDUCIDO de 1 a 0.5
-                                return True
+                                likes_anteriores = df_actualizado.loc[mask, col_likes_anterior].iloc[0]
+                                if pd.notna(likes_anteriores):
+                                    likes_anteriores = int(likes_anteriores)
+                                    variacion_likes = likes_nuevos - likes_anteriores
+                                    df_actualizado.loc[mask, 'Variacion_Likes'] = variacion_likes
+                                    
+                                    if variacion_likes > 3:
+                                        self.top_likes_crecimiento.append({
+                                            'Titulo': fila_nueva['Titulo'],
+                                            'Cuenta': fila_nueva['Cuenta'],
+                                            'Variacion': variacion_likes,
+                                            'Likes_Anteriores': likes_anteriores,
+                                            'Likes_Nuevos': likes_nuevos
+                                        })
                             except:
-                                continue
-                except:
+                                df_actualizado.loc[mask, 'Variacion_Likes'] = 0
+                        
+                except Exception as e:
+                    self.stats['errores'] += 1
+                    print(f"Error procesando moto existente: {str(e)}")
                     continue
-        except:
-            continue
-    
-    return False
-
-def smart_load_all_ads(driver, expected_count=300, max_clicks=15):
-    """
-    Carga todos los anuncios de forma inteligente - VERSION OPTIMIZADA
-    """
-    print(f"[SMART] Objetivo: {expected_count} anuncios, maximo {max_clicks} clics")
-    
-    # Scroll inicial mas rapido
-    for i in range(2):  # REDUCIDO de 3 a 2
-        driver.execute_script("window.scrollBy(0, 1000);")
-        time.sleep(0.2)  # REDUCIDO de 0.3 a 0.2
-    
-    initial_count = len(driver.find_elements(By.XPATH, "//a[contains(@href, '/item/')]"))
-    print(f"[SMART] Anuncios iniciales: {initial_count}")
-    
-    clicks_realizados = 0
-    last_count = initial_count
-    
-    for click_num in range(max_clicks):
-        # Scroll mas rapido
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(0.5)  # REDUCIDO de 1 a 0.5
-        
-        if find_and_click_load_more(driver):
-            clicks_realizados += 1
             
-            # Espera mas corta para carga
-            time.sleep(1.5)  # REDUCIDO de 3 a 1.5
-            
-            new_count = len(driver.find_elements(By.XPATH, "//a[contains(@href, '/item/')]"))
-            
-            if new_count > last_count:
-                print(f"[SMART] Clic {clicks_realizados}: {last_count} -> {new_count} (+{new_count - last_count})")
-                last_count = new_count
-                
-                if new_count >= expected_count:
-                    print(f"[SMART] Objetivo alcanzado")
-                    break
-            else:
-                print(f"[SMART] Sin nuevos anuncios, fin del contenido")
-                break
-        else:
-            print(f"[SMART] Boton no encontrado, fin del contenido")
-            break
-    
-    final_count = len(driver.find_elements(By.XPATH, "//a[contains(@href, '/item/')]"))
-    print(f"[SMART] Total final: {final_count} anuncios ({clicks_realizados} clics)")
-    
-    return final_count
-
-def get_user_ads(driver, user_url, account_name):
-    """Procesa todos los anuncios con extraccion ULTRA ROBUSTA - OPTIMIZADA"""
-    print(f"\n[INFO] === PROCESANDO: {account_name} ===")
-    print(f"[INFO] URL: {user_url}")
-    
-    all_ads = []
-    
-    try:
-        if not safe_navigate(driver, user_url):
-            print(f"[ERROR] No se pudo acceder al perfil")
-            return all_ads
-        
-        accept_cookies(driver)
-        
-        # CARGA OPTIMIZADA de anuncios
-        final_count = smart_load_all_ads(driver, expected_count=300, max_clicks=15)
-        
-        ad_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '/item/')]")
-        ad_urls = list(set([elem.get_attribute('href') for elem in ad_elements if elem.get_attribute('href')]))
-        
-        print(f"[INFO] Enlaces unicos: {len(ad_urls)}")
-        
-        successful_ads = 0
-        failed_ads = 0
-        
-        # CONTADORES PARA MONITORING RAPIDO
-        precios_ok = 0
-        km_ok = 0
-        ejemplos_mostrados = 0
-        
-        for idx, ad_url in enumerate(tqdm(ad_urls, desc=f"Extrayendo {account_name}", colour="green")):
-            try:
-                if not safe_navigate(driver, ad_url):
-                    failed_ads += 1
+            # PROCESAR MOTOS VENDIDAS (USAR URL)
+            for url_moto in motos_vendidas_urls:
+                try:
+                    mask = df_actualizado['URL'] == url_moto
+                    if mask.any():
+                        estado_actual = df_actualizado.loc[mask, 'Estado'].iloc[0]
+                        
+                        if estado_actual == 'activa':
+                            df_actualizado.loc[mask, 'Estado'] = 'vendida'
+                            df_actualizado.loc[mask, 'Fecha_Venta'] = self.fecha_display
+                            
+                            fila_vendida = df_actualizado.loc[mask].iloc[0]
+                            
+                            # Obtener visitas y likes de la fecha anterior para el reporte
+                            visitas_anteriores = 0
+                            likes_anteriores = 0
+                            if fecha_anterior:
+                                col_visitas_anterior = f"Visitas_{fecha_anterior}"
+                                col_likes_anterior = f"Likes_{fecha_anterior}"
+                                if col_visitas_anterior in df_actualizado.columns:
+                                    visitas_anteriores = df_actualizado.loc[mask, col_visitas_anterior].iloc[0]
+                                    if pd.isna(visitas_anteriores):
+                                        visitas_anteriores = 0
+                                if col_likes_anterior in df_actualizado.columns:
+                                    likes_anteriores = df_actualizado.loc[mask, col_likes_anterior].iloc[0]
+                                    if pd.isna(likes_anteriores):
+                                        likes_anteriores = 0
+                            
+                            self.motos_vendidas_lista.append({
+                                'Titulo': fila_vendida['Titulo'],
+                                'Cuenta': fila_vendida['Cuenta'],
+                                'Precio': fila_vendida['Precio'],
+                                'Visitas': int(visitas_anteriores),
+                                'Likes': int(likes_anteriores)
+                            })
+                            
+                            self.stats['motos_vendidas'] += 1
+                        
+                except Exception as e:
+                    print(f"Error procesando moto vendida: {str(e)}")
                     continue
-                
-                # EXTRACCION ROBUSTA 
-                title = extract_title_robust(driver)
-                price = extract_price_robust(driver)
-                likes = extract_likes_robust(driver)
-                year, km = extract_year_and_km_robust(driver)
-                views = extract_views_robust(driver)
-                moto_id = create_moto_id(title, price, year, km)
-                
-                # CONTEO PARA MONITORING
-                if price != "No especificado":
-                    precios_ok += 1
-                if km != "No especificado":
-                    km_ok += 1
-                
-                # MOSTRAR EJEMPLOS DE LOS PRIMEROS 3 ANUNCIOS
-                if ejemplos_mostrados < 3 and price != "No especificado" and km != "No especificado":
-                    print(f"[EJEMPLO {ejemplos_mostrados + 1}] {title[:30]}... | {price} | {km} | {year}")
-                    ejemplos_mostrados += 1
-                
-                ad_data = {
-                    'ID_Moto': moto_id,
-                    'Cuenta': account_name,
-                    'Titulo': title,
-                    'Precio': price,
-                    'Ano': year,
-                    'Kilometraje': km,
-                    'Visitas': views,
-                    'Likes': likes,
-                    'URL': ad_url,
-                    'Fecha_Extraccion': datetime.now().strftime("%d/%m/%Y %H:%M")
-                }
-                
-                all_ads.append(ad_data)
-                successful_ads += 1
-                
-                # MOSTRAR PROGRESO CADA 50 ANUNCIOS
-                if successful_ads % 50 == 0:
-                    precio_pct = (precios_ok / successful_ads * 100) if successful_ads > 0 else 0
-                    km_pct = (km_ok / successful_ads * 100) if successful_ads > 0 else 0
-                    print(f"[PROGRESO] {successful_ads} procesados | Precios: {precio_pct:.1f}% | KM: {km_pct:.1f}%")
-                
-                # SIN DELAY entre anuncios para maxima velocidad
-                
-            except Exception as e:
-                failed_ads += 1
-                continue
-    
-    except Exception as e:
-        print(f"[ERROR] Error procesando cuenta {account_name}: {str(e)}")
-    
-    # RESUMEN DETALLADO POR CUENTA
-    if successful_ads > 0:
-        precio_pct = (precios_ok / successful_ads * 100)
-        km_pct = (km_ok / successful_ads * 100)
-        print(f"[RESUMEN] {account_name}: {successful_ads} exitosos, {failed_ads} fallos")
-        print(f"[CALIDAD] Precios: {precios_ok}/{successful_ads} ({precio_pct:.1f}%) | KM: {km_ok}/{successful_ads} ({km_pct:.1f}%)")
-        
-        # ALERTA SI CALIDAD BAJA
-        if precio_pct < 70:
-            print(f"[ALERTA] Baja extraccion de precios en {account_name}")
-        if km_pct < 60:
-            print(f"[ALERTA] Baja extraccion de KM en {account_name}")
-    else:
-        print(f"[RESUMEN] {account_name}: Sin anuncios procesados")
-        
-    return all_ads
-
-def main():
-    """Funcion principal del scraper automatizado - OPTIMIZADA"""
-    print("="*80)
-    print("    SCRAPER - VERSION OPTIMIZADA PARA VELOCIDAD")
-    print("="*80)
-    print(" CARACTERISTICAS:")
-    print("   • Extraccion robusta con multiples estrategias")
-    print("   • Subida directa a Google Sheets")
-    print("   • Automatizado para GitHub Actions")
-    print("   • OPTIMIZADO: 3x mas rapido que version anterior")
-    print()
-    
-    try:
-        # Configurar Google Sheets
-        credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-        sheet_id = os.getenv('GOOGLE_SHEET_ID') or GOOGLE_SHEET_ID_DATA
-        
-        if not credentials_json:
-            print("[ERROR] Credenciales de Google no encontradas")
-            return False
-        
-        if not sheet_id:
-            print("[ERROR] ID de Google Sheet no encontrado")
-            return False
-        
-        # Inicializar Google Sheets handler
-        print("[INFO] Inicializando conexion a Google Sheets...")
-        gs_handler = GoogleSheetsData(
-            credentials_json_string=credentials_json,
-            sheet_id=sheet_id
-        )
-        
-        # Probar conexion
-        if not gs_handler.test_connection():
-            print("[ERROR] No se pudo conectar a Google Sheets")
-            return False
-        
-        # Obtener cuentas
-        test_mode = os.getenv('TEST_MODE', 'false').lower() == 'true'
-        moto_accounts = get_moto_accounts(test_mode)
-        
-        print(f"[INFO] Inicializando navegador...")
-        driver = setup_browser()
-        
-        all_results = []
-        
-        print(f"[INFO] Procesando {len(moto_accounts)} cuentas")
-        
-        start_time = time.time()
-        
-        for account_name, account_url in moto_accounts.items():
-            print(f"\n{'='*60}")
-            print(f"PROCESANDO: {account_name}")
-            print(f"{'='*60}")
             
-            try:
-                account_ads = get_user_ads(driver, account_url, account_name)
-                all_results.extend(account_ads)
-                
-                print(f"[RESUMEN] {account_name}: {len(account_ads)} anuncios procesados")
-                
-                time.sleep(1)  # REDUCIDO de 2 a 1 segundo entre cuentas
-                
-            except Exception as e:
-                print(f"[ERROR] Error procesando {account_name}: {str(e)}")
-                continue
+            # PROCESAR MOTOS NUEVAS (USAR URL)
+            for url_nueva in motos_nuevas_urls:
+                try:
+                    fila_nueva = df_nuevo[df_nuevo['URL'] == url_nueva].iloc[0]
+                    
+                    nueva_fila = {
+                        'ID_Unico_Real': fila_nueva['ID_Unico_Real'],
+                        'Cuenta': str(fila_nueva['Cuenta']) if pd.notna(fila_nueva['Cuenta']) else 'No especificado',
+                        'Titulo': str(fila_nueva['Titulo']) if pd.notna(fila_nueva['Titulo']) else 'No especificado',
+                        'Precio': str(fila_nueva['Precio']) if pd.notna(fila_nueva['Precio']) else 'No especificado',
+                        'Kilometraje': str(fila_nueva['Kilometraje']) if pd.notna(fila_nueva['Kilometraje']) else 'No especificado',
+                        'Primera_Deteccion': self.fecha_display,
+                        'Estado': 'activa',
+                        'Fecha_Venta': pd.NA,
+                        'URL': str(fila_nueva['URL']),
+                        'Variacion_Likes': 0
+                    }
+                    
+                    # Valores iniciales para totales
+                    visitas_iniciales = int(fila_nueva['Visitas']) if pd.notna(fila_nueva['Visitas']) else 0
+                    likes_iniciales = int(fila_nueva['Likes']) if pd.notna(fila_nueva['Likes']) else 0
+                    
+                    nueva_fila['Visitas_Totales'] = visitas_iniciales
+                    nueva_fila['Likes_Totales'] = likes_iniciales
+                    
+                    # Inicializar todas las columnas de fechas anteriores con NA
+                    for col_visitas in columnas_visitas:
+                        nueva_fila[col_visitas] = pd.NA
+                    for col_likes in columnas_likes:
+                        nueva_fila[col_likes] = pd.NA
+                    
+                    # Anadir datos para la fecha actual
+                    nueva_fila[col_visitas_hoy] = visitas_iniciales
+                    nueva_fila[col_likes_hoy] = likes_iniciales
+                    
+                    df_actualizado = pd.concat([df_actualizado, pd.DataFrame([nueva_fila])], ignore_index=True)
+                    
+                    self.stats['motos_nuevas'] += 1
+                    self.motos_nuevas_lista.append({
+                        'Titulo': nueva_fila['Titulo'],
+                        'Cuenta': nueva_fila['Cuenta'],
+                        'Precio': nueva_fila['Precio']
+                    })
+                    
+                except Exception as e:
+                    self.stats['errores'] += 1
+                    print(f"Error procesando moto nueva: {str(e)}")
+                    continue
+            
+            # LIMPIEZA FINAL
+            print("Limpieza final de datos...")
+            df_actualizado = self.limpiar_columnas_numericas(df_actualizado)
+            
+            # ORDENACION: activas arriba por likes, vendidas abajo
+            df_activas = df_actualizado[df_actualizado['Estado'] == 'activa'].copy()
+            df_vendidas = df_actualizado[df_actualizado['Estado'] == 'vendida'].copy()
+            
+            # Ordenar activas por likes y visitas de hoy
+            if col_likes_hoy in df_activas.columns:
+                df_activas = df_activas.sort_values(
+                    [col_likes_hoy, col_visitas_hoy], ascending=[False, False], na_position='last'
+                )
+            
+            # Ordenar vendidas por fecha de venta
+            if not df_vendidas.empty and 'Fecha_Venta' in df_vendidas.columns:
+                df_vendidas = df_vendidas.sort_values('Fecha_Venta', ascending=False, na_position='last')
+            
+            # Concatenar: activas arriba, vendidas abajo
+            df_actualizado = pd.concat([df_activas, df_vendidas], ignore_index=True)
+            
+            return df_actualizado
+            
+        except Exception as e:
+            print(f"ERROR critico en procesamiento: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+            
+    def mostrar_resumen_final(self):
+        """Muestra el resumen final"""
+        tiempo_total = (datetime.now() - self.tiempo_inicio).total_seconds()
+        self.stats['tiempo_ejecucion'] = tiempo_total
         
-        # Procesar y subir resultados
-        if all_results:
-            elapsed_time = (time.time() - start_time) / 60
-            
-            print(f"\n{'='*80}")
-            print(f"PROCESAMIENTO COMPLETADO EN {elapsed_time:.1f} MINUTOS")
-            print(f"{'='*80}")
-            
-            df = pd.DataFrame(all_results)
-            df = df.sort_values(['Likes', 'Visitas'], ascending=[False, False])
-            
-            total_processed = len(df)
-            total_likes = df['Likes'].sum()
-            total_views = df['Visitas'].sum()
-            
-            # Calcular porcentajes de extraccion exitosa
-            titles_ok = len(df[df['Titulo'] != 'Titulo no encontrado'])
-            prices_ok = len(df[df['Precio'] != 'No especificado'])
-            km_ok = len(df[df['Kilometraje'] != 'No especificado'])
-            years_ok = len(df[df['Ano'] != 'No especificado'])
-            
-            print(f"\nESTADISTICAS SCRAPER:")
-            print(f"• Total anuncios procesados: {total_processed:,}")
-            print(f"• Total visitas: {total_views:,}")
-            print(f"• Total likes: {total_likes:,}")
-            print(f"• Tiempo total: {elapsed_time:.1f} minutos")
-            print(f"\n CALIDAD DE EXTRACCION:")
-            print(f"• Titulos: {titles_ok}/{total_processed} ({titles_ok/total_processed*100:.1f}%) {'' if titles_ok/total_processed > 0.8 else 'WARNING'}")
-            print(f"• Precios: {prices_ok}/{total_processed} ({prices_ok/total_processed*100:.1f}%) {'' if prices_ok/total_processed > 0.7 else 'WARNING'}")
-            print(f"• Kilometraje: {km_ok}/{total_processed} ({km_ok/total_processed*100:.1f}%) {'' if km_ok/total_processed > 0.6 else 'WARNING'}")
-            print(f"• Años: {years_ok}/{total_processed} ({years_ok/total_processed*100:.1f}%) {'' if years_ok/total_processed > 0.5 else 'WARNING'}")
-            print(f"\n PROMEDIOS:")
-            print(f"• Media visitas: {df['Visitas'].mean():.1f}")
-            print(f"• Media likes: {df['Likes'].mean():.1f}")
-            
-            # MOSTRAR ALGUNOS EJEMPLOS FINALES
-            print(f"\n EJEMPLOS DE DATOS EXTRAIDOS:")
-            samples = df.head(3)
-            for i, (_, row) in enumerate(samples.iterrows(), 1):
-                print(f"  {i}. {row['Titulo'][:40]}...")
-                print(f"      {row['Precio']} |  {row['Kilometraje']} |  {row['Ano']} | Views {row['Visitas']} | Likes {row['Likes']}")
-            
-            # ALERTAS DE CALIDAD
-            alertas = []
-            if titles_ok/total_processed < 0.8:
-                alertas.append("Baja extraccion de titulos")
-            if prices_ok/total_processed < 0.7:
-                alertas.append("Baja extraccion de precios")
-            if km_ok/total_processed < 0.6:
-                alertas.append("Baja extraccion de kilometraje")
-                
-            if alertas:
-                print(f"\nWARNING ALERTAS DE CALIDAD:")
-                for alerta in alertas:
-                    print(f"   • {alerta}")
-            else:
-                print(f"\nCALIDAD EXCELENTE: Todos los indicadores estan bien")
-            
-            # Subir a Google Sheets
-            fecha_extraccion = datetime.now().strftime("%d/%m/%Y")
-            print(f"\n[INFO] Subiendo datos a Google Sheets...")
-            
-            success, sheet_name = gs_handler.subir_datos_scraper(df, fecha_extraccion)
-            
-            if success:
-                print(f"EXITO: Datos subidos correctamente a {sheet_name}")
-                print(f"URL: https://docs.google.com/spreadsheets/d/{sheet_id}")
-                return True
-            else:
-                print("[ERROR] Fallo al subir datos a Google Sheets")
+        print(f"\n{'='*80}")
+        print("PROCESAMIENTO COMPLETADO V8.2 CORREGIDO")
+        print("="*80)
+        print(f"Fecha procesada: {self.fecha_display}")
+        print(f"Motos en datos del scraper: {self.stats['total_archivo_nuevo']:,}")
+        print(f"Motos en historico: {self.stats['total_historico']:,}")
+        print(f"Motos nuevas detectadas: {self.stats['motos_nuevas']:,}")
+        print(f"Motos actualizadas: {self.stats['motos_actualizadas']:,}")
+        print(f"Motos vendidas: {self.stats['motos_vendidas']:,}")
+        print(f"Errores procesamiento: {self.stats['errores']:,}")
+        print(f"Tiempo ejecucion: {tiempo_total:.2f} segundos")
+        print(f"Nuevas columnas: Visitas_{self.fecha_display}, Likes_{self.fecha_display}")
+        
+        if self.top_likes_crecimiento:
+            print(f"\nDESTACADOS DEL DIA:")
+            top_likes = self.top_likes_crecimiento[0]
+            print(f"Mayor crecimiento likes: +{top_likes['Variacion']} | {top_likes['Titulo'][:40]}")
+        
+        if self.stats['errores'] > 0:
+            print(f"\nADVERTENCIAS:")
+            print(f"Se produjeron {self.stats['errores']} errores durante el procesamiento")
+            print("Las motos con errores mantuvieron sus datos anteriores")
+        
+        print("\nHistorico evolutivo consolidado exitosamente!")
+        print("LOGICA CORREGIDA V8.2: URL como identificador unico (SIN PRECIO)")
+        print("Hojas: Data_Historico (principal)")
+        
+    def ejecutar(self):
+        """Funcion principal que ejecuta todo el proceso - CORREGIDA"""
+        try:
+            # 1. Inicializar Google Sheets
+            if not self.inicializar_google_sheets():
                 return False
             
-        else:
-            print("[ERROR] No se procesaron anuncios")
+            # 2. Leer datos del scraper mas reciente - ARREGLO CRITICO
+            df_nuevo = self.leer_datos_scraper()
+            
+            # 3. Mostrar header con fecha correcta
+            self.mostrar_header()
+            
+            # 4. Procesar segun si es primera vez o no
+            df_historico_existente = self.leer_historico_existente()
+            
+            if df_historico_existente is None:
+                # Primera ejecucion
+                df_historico_final = self.primera_ejecucion(df_nuevo)
+            else:
+                # Actualizar historico existente - ARREGLO CRITICO
+                df_historico_final = self.procesar_motos_nuevas_y_existentes(df_nuevo, df_historico_existente)
+                
+            self.stats['total_historico'] = len(df_historico_final)
+            
+            # 5. Guardar historico actualizado en Google Sheets
+            print("\nGuardando historico actualizado en Google Sheets...")
+            success = self.gs_handler.guardar_historico_con_hojas_originales(
+                df_historico_final, 
+                self.fecha_display
+            )
+            
+            if not success:
+                print("ERROR: No se pudo guardar el historico en Google Sheets")
+                return False
+            
+            # 6. Mostrar resumen final
+            self.mostrar_resumen_final()
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"\nERROR CRITICO: {error_msg}")
+            print("El procesamiento no se pudo completar correctamente")
+            self.stats['errores'] = 1
+            
+            if self.stats['motos_nuevas'] > 0 or self.stats['motos_actualizadas'] > 0:
+                print(f"\nESTADISTICAS PARCIALES:")
+                print(f"Nuevas procesadas: {self.stats['motos_nuevas']}")
+                print(f"Actualizadas: {self.stats['motos_actualizadas']}")
+                print(f"Vendidas: {self.stats['motos_vendidas']}")
+            
+            print(f"\nINFORMACION DE DEBUG:")
+            import traceback
+            traceback.print_exc()
+            
             return False
+
+def main():
+    """Funcion principal del analizador - CORREGIDA"""
+    print("Iniciando Analizador Historico V8.2 - Version Google Sheets CORREGIDA FINAL...")
+    print("VERSION AUTOMATIZADA V8.2:")
+    print("   • Lee datos del scraper desde Google Sheets (hojas SCR)")
+    print("   • Actualiza historico evolutivo en Google Sheets")
+    print("   • USA URL como identificador unico principal (SIN PRECIO)")
+    print("   • Mantiene hojas originales: Data_Historico")
+    print("   • Cada ejecucion anade: Visitas_FECHA y Likes_FECHA")
+    print("   • Anade Visitas_Totales y Likes_Totales")
+    print("   • ARREGLO CRITICO: Manejo correcto de DataFrame vs tupla")
+    print("   • Primera vez: Crea historico completo")
+    print("   • Siguientes: Anade columnas por fecha")
+    print()
     
-    except Exception as e:
-        print(f"[ERROR] Error general: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+    analizador = AnalizadorHistoricoData()
+    exito = analizador.ejecutar()
     
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+    if exito:
+        print("\nPROCESO COMPLETADO EXITOSAMENTE V8.2")
+        print("FORMATO DEL HISTORICO:")
+        print("   • Columnas basicas: ID_Unico_Real, Cuenta, Titulo, Precio, etc.")
+        print("   • Columnas totales: Visitas_Totales, Likes_Totales")
+        print("   • Columnas por fecha: Visitas_DD/MM/YYYY, Likes_DD/MM/YYYY")
+        print("   • Ultima columna: Variacion_Likes (respecto a fecha anterior)")
+        print("   • ORDENACION: Activas arriba (por likes), vendidas abajo")
+        print("   • ID UNICO: URL + cuenta + titulo + km (SIN PRECIO)")
         
-        print(f"\nScraper completado!")
+        print("\nPARA LA SIGUIENTE EJECUCION:")
+        print("   1. El scraper se ejecutara automaticamente")
+        print("   2. Este analizador se ejecutara automaticamente despues")
+        print("   3. Se anadiran automaticamente las nuevas columnas")
+        print("   URL siempre usado como identificador unico!")
+        print("   Hojas: Data_Historico (principal)")
+        
         return True
+    else:
+        print("\nProceso completado con errores")
+        print("Revisa los mensajes de error anteriores para diagnosticar el problema")
+        return False
 
 if __name__ == "__main__":
     success = main()

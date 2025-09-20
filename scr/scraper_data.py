@@ -366,19 +366,18 @@ def extract_year_and_km_robust(driver):
             if len(description_text) > 50:
                 print(f"[DEBUG] Descripción encontrada: {description_text[:150]}...")
             
-            # EXTRAER KILOMETROS - PATRONES CORREGIDOS PARA AMBOS FORMATOS
+            # EXTRAER KILOMETROS - PATRONES CORREGIDOS PARA AMBOS FORMATOS            
             km_patterns = [
-                # FORMATO MOTOSPLUS: "Kilómetros: 12400"
-                r'Kilómetros:\s*(\d+)',
-                r'kilometros:\s*(\d+)',
+                # PATRONES ROBUSTOS PARA TODOS LOS CASOS
+                r'Kil[óo]metros?\s*:?\s*(\d+)',              # Kilómetros/Kilometros con/sin acento
+                r'[•·▪▫◦\u2022\u2023\u25E6]\s*KM\s*:?\s*(\d+)',  # Diferentes bullets + KM
+                r'[•·▪▫◦\u2022\u2023\u25E6]\s*km\s*:?\s*(\d+)',  # Diferentes bullets + km
                 
-                # FORMATO CUIMO: "• KM: 15999"
+                # FORMATOS ORIGINALES (respaldo)
                 r'•\s*KM:\s*(\d+)',
                 r'•\s*km:\s*(\d+)',
-                
-                # FORMATOS ADICIONALES (sin bullet)
-                r'KM:\s*(\d+)',
-                r'km:\s*(\d+)',
+                r'KM\s*:?\s*(\d+)',                          # KM con o sin dos puntos
+                r'km\s*:?\s*(\d+)',                          # km con o sin dos puntos
                 
                 # FORMATOS CON GUIONES
                 r'-\s*Kilometros:\s*(\d+)',
@@ -387,9 +386,9 @@ def extract_year_and_km_robust(driver):
                 r'-\s*km:\s*(\d+)',
                 
                 # FORMATOS GENERICOS
-                r'(\d+)\s*km',
-                r'(\d+)\s*kilometros',
-                r'(\d+)\s*mil\s*km',
+                r'(\d+)\s*km\b',                             # Número + km (con límite de palabra)
+                r'(\d+)\s*kilometros\b',                     # Número + kilometros
+                r'(\d+)\s*mil\s*km',                         # Número + mil km
             ]
             
             for pattern in km_patterns:

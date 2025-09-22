@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🏍️ CUIMO DATA SCRAPER 🏍️
+# 🏍️ MOTICK DATA SCRAPER 🏍️
 
 **Sistema automatizado de scraping y análisis de mercado de motos en Wallapop**
 

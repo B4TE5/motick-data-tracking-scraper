@@ -7,6 +7,7 @@ CORRECCIONES APLICADAS:
 - Ordenamiento por kilómetros de más a menos
 - Carga más agresiva de anuncios (25 clics, esperas más largas)
 - Logs de debug para verificar extracción
+- ESPERA EXPLÍCITA para descripción (resuelve 3 casos faltantes)
 """
 
 import time
@@ -338,11 +339,25 @@ def extract_year_and_km_robust(driver):
     """
     CORREGIDO: Extrae año y KM con patrones para MOTOSPLUS y CUIMO
     Formatos: "Kilómetros: 12400" y "• KM: 15999" / "Año: 2022" y "• Año: 2017"
+    AÑADIDO: Espera explícita para descripción (resuelve 3 casos faltantes)
     """
     year = "No especificado"
     km = "No especificado"
     
     try:
+        # ==========================================
+        # CAMBIO ÚNICO: ESPERA EXPLÍCITA AÑADIDA
+        # ==========================================
+        try:
+            WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 
+                    "section.item-detail_ItemDetailTwoColumns__description__0DKb0"))
+            )
+            time.sleep(0.3)  # Buffer adicional
+        except:
+            pass  # Si no carga en 3 seg, continuar igual
+        # ==========================================
+        
         # EXTRAER DE LA DESCRIPCION usando selector especifico de Wallapop
         description_selectors = [
             "section.item-detail_ItemDetailTwoColumns__description__0DKb0",

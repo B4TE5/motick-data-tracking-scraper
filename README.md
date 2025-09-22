@@ -35,17 +35,6 @@ Los datos extraídos se organizan automáticamente en un **Google Sheet comparti
 
 ---
 
-## 🏪 Cuentas Monitoreadas
-
-| Cuenta | URL | Anuncios Aprox. |
-|--------|-----|-----------------|
-| Cuimo 1 | https://es.wallapop.com/user/cuimo-418807885 | ~200 |
-| Cuimo 2 | https://es.wallapop.com/user/cuimom-469497220 | ~130 |
-| Cuimo 3 | https://es.wallapop.com/user/cuimom-457423496 | ~197 |
-| Motosplus | https://es.wallapop.com/user/motosp-436538733 | ~130 |
-
----
-
 ## 📊 Estructura de Datos
 
 | Campo               | Descripción                                       |

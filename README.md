@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🏍️ MOTICK DATA SCRAPER 🏍️
+# 🏍️ MOTICK DATA TRACKING SCRAPER 🏍️
 
 **Sistema automatizado de scraping y análisis de mercado de motos en Wallapop**
 
@@ -19,7 +19,7 @@
 
 ## 🖥️ Descripción General
 
-Este proyecto está diseñado para **scrapear datos de anuncios de motos** desde diferentes cuentas asociadas en Wallapop. Además de registrar información básica del anuncio, el sistema analiza diariamente el **histórico de visitas, likes y estado de venta** para construir una visión de la evolución del mercado.
+Este proyecto está diseñado para **scrapear datos de anuncios de motos** desde diferentes cuentas de interés en Wallapop. Además de registrar información básica del anuncio, el sistema analiza diariamente el **histórico de visitas, likes y estado de venta** para construir una visión de la evolución del mercado.
 
 Los datos extraídos se organizan automáticamente en un **Google Sheet compartido**, alimentando un **histórico completo de cambios** que permite identificar tendencias, comparar precios, detectar anuncios vendidos y generar insights útiles para la toma de decisiones comerciales.
 

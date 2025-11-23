@@ -3,7 +3,7 @@ name: Scraper Automation
 on:
   # Ejecutar automaticamente cada dia a las 06:00 UTC (08:00 Madrid)
   schedule:
-    - cron: '0 6 * * *'
+    #- cron: '0 6 * * *'
   
   # Permitir ejecucion manual
   workflow_dispatch:
